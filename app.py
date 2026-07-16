@@ -17,7 +17,7 @@ import mediapipe as mp
 import pyttsx3
 from PIL import Image
 
-from detector import classify, features
+from detector import features
 from dictionary import CustomDictionary
 
 HOLD_SECONDS = 1.2          # tiempo que hay que mantener la seña para confirmarla
@@ -39,12 +39,6 @@ MUTED = "#7fa8bd"
 DISABLED = "#2c3e4d"
 
 CELESTE_BGR = (255, 208, 77)  # #4dd0ff en BGR para OpenCV
-
-VOCAB = [
-    ("HOLA", "mano abierta"), ("SÍ", "pulgar arriba"), ("NO", "pulgar abajo"),
-    ("BIEN", "índice y medio"), ("YO", "solo índice"), ("TE QUIERO", "pulgar+índice+meñique"),
-    ("AYUDA", "pulgar y meñique"), ("GRACIAS", "3 dedos centrales"), ("ALTO", "puño cerrado"),
-]
 
 
 class SignWorker(threading.Thread):
@@ -154,8 +148,7 @@ class SignWorker(threading.Thread):
                 mp_draw.draw_landmarks(
                     frame, hand, mp_hands.HAND_CONNECTIONS, lm_style, conn_style)
                 feat = features(hand.landmark)
-                # Las palabras personalizadas tienen prioridad sobre las reglas
-                word = self.dictionary.classify(feat) or classify(hand.landmark)
+                word = self.dictionary.classify(feat)
 
             if self.mode == "translate":
                 self._update_gesture(word)
@@ -297,24 +290,27 @@ class SenIAApp(ctk.CTk):
         for child in self.vocab_grid.winfo_children():
             child.destroy()
 
-        entries = [(word, gesture, False) for word, gesture in VOCAB]
-        entries += [(word, "personalizada", True)
-                    for word in sorted(self.worker.dictionary.words)]
+        words = sorted(self.worker.dictionary.words)
+        if not words:
+            ctk.CTkLabel(
+                self.vocab_grid,
+                text="Tu diccionario está vacío.\n"
+                     "Pulsa «➕ Agregar palabra», escribe la palabra y muestra\n"
+                     "tu seña a la cámara para entrenarla.",
+                font=("Segoe UI", 13), text_color=MUTED, justify="center",
+            ).grid(row=0, column=0, columnspan=3, pady=30)
+            return
 
-        for idx, (word, gesture, custom) in enumerate(entries):
+        for idx, word in enumerate(words):
             item = ctk.CTkFrame(self.vocab_grid, fg_color=PANEL_2, corner_radius=10,
-                                border_width=1 if custom else 0,
-                                border_color=CELESTE_DIM)
+                                border_width=1, border_color=CELESTE_DIM)
             item.grid(row=idx // 3, column=idx % 3, sticky="nsew", padx=4, pady=4)
             ctk.CTkLabel(item, text=word, font=("Segoe UI", 13, "bold"),
-                         text_color=CELESTE).pack(pady=(8, 0))
-            ctk.CTkLabel(item, text=gesture, font=("Segoe UI", 10),
-                         text_color=MUTED).pack(pady=(0, 8 if not custom else 0))
-            if custom:
-                ctk.CTkButton(item, text="✕ eliminar", height=18, width=70,
-                              fg_color="transparent", hover_color="#241a1a",
-                              text_color="#c96a6a", font=("Segoe UI", 10),
-                              command=lambda w=word: self._delete_word(w)).pack(pady=(0, 6))
+                         text_color=CELESTE).pack(pady=(10, 2))
+            ctk.CTkButton(item, text="✕ eliminar", height=18, width=70,
+                          fg_color="transparent", hover_color="#241a1a",
+                          text_color="#c96a6a", font=("Segoe UI", 10),
+                          command=lambda w=word: self._delete_word(w)).pack(pady=(0, 8))
 
     # ---------- acciones ----------
 
