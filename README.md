@@ -40,7 +40,8 @@ cada una.
 
 1. Pulsa **➕ Agregar palabra** y escribe la palabra.
 2. Tras una cuenta regresiva de 3 segundos, mantén tu seña frente a la cámara
-   mientras SenIA graba 30 muestras.
+   mientras SenIA graba 30 muestras. Puedes usar **una o dos manos** — la
+   posición relativa entre ambas manos forma parte de la seña.
 3. La palabra queda guardada en `custom_words.json` (local) y se reconoce al
    instante. Cada palabra tiene un botón **✕ eliminar** para regrabarla.
 

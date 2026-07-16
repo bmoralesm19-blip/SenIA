@@ -89,7 +89,7 @@ class SignWorker(threading.Thread):
             done = len(self._samples)
             self.record_progress = done / RECORD_SAMPLES
             self.status_text = (f"Grabando «{self._record_word}»  {done}/{RECORD_SAMPLES}"
-                                if feat is not None else "Muestra la mano a la cámara…")
+                                if feat is not None else "Muestra tus manos a la cámara…")
             if done >= RECORD_SAMPLES:
                 self.dictionary.add(self._record_word, self._samples)
                 self.word_just_added = self._record_word
@@ -128,7 +128,7 @@ class SignWorker(threading.Thread):
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 540)
         hands = mp_hands.Hands(
-            max_num_hands=1,
+            max_num_hands=2,
             model_complexity=0,
             min_detection_confidence=0.6,
             min_tracking_confidence=0.5,
@@ -144,10 +144,14 @@ class SignWorker(threading.Thread):
             result = hands.process(rgb)
             word, feat = None, None
             if result.multi_hand_landmarks:
-                hand = result.multi_hand_landmarks[0]
-                mp_draw.draw_landmarks(
-                    frame, hand, mp_hands.HAND_CONNECTIONS, lm_style, conn_style)
-                feat = features(hand.landmark)
+                for hand in result.multi_hand_landmarks:
+                    mp_draw.draw_landmarks(
+                        frame, hand, mp_hands.HAND_CONNECTIONS, lm_style, conn_style)
+                # Orden estable izquierda→derecha para que la seña bimanual
+                # produzca siempre el mismo vector de features
+                detected = sorted((h.landmark for h in result.multi_hand_landmarks),
+                                  key=lambda lm: lm[0].x)
+                feat = features(detected)
                 word = self.dictionary.classify(feat)
 
             if self.mode == "translate":
@@ -320,7 +324,8 @@ class SenIAApp(ctk.CTk):
         dialog = ctk.CTkInputDialog(
             title="Agregar palabra",
             text="Escribe la palabra nueva.\nLuego tendrás 3 segundos para\n"
-                 "preparar la seña y mantenerla frente a la cámara.")
+                 "preparar la seña (con una o dos manos)\n"
+                 "y mantenerla frente a la cámara.")
         word = (dialog.get_input() or "").strip().upper()
         if word:
             self.worker.start_recording(word)

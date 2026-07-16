@@ -42,6 +42,9 @@ class CustomDictionary:
         best_word, best_dist = None, MATCH_THRESHOLD
         for word, samples in self.words.items():
             for sample in samples:
+                # Solo comparar muestras con el mismo número de manos
+                if len(sample) != len(feat):
+                    continue
                 dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(feat, sample)))
                 if dist < best_dist:
                     best_word, best_dist = word, dist
