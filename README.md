@@ -32,6 +32,19 @@ python app.py
 2. La persona oyente lee la frase o pulsa **🔊 Hablar** para oírla.
 3. **⌫ Borrar palabra** quita la última; **🗑 Limpiar** reinicia la frase.
 
+## Entrena tus propias palabras
+
+Pulsa **➕ Agregar palabra**, escribe la palabra y, tras una cuenta regresiva de
+3 segundos, mantén tu seña frente a la cámara mientras SenIA graba 30 muestras.
+La palabra queda guardada en `custom_words.json` (local) y se reconoce al
+instante por vecino más cercano sobre los landmarks normalizados de la mano.
+Las palabras personalizadas aparecen en el vocabulario con borde celeste y un
+botón para eliminarlas, y tienen prioridad sobre las señas integradas.
+
+Consejo: al grabar, mueve ligeramente la mano (ángulo y distancia) para que el
+reconocimiento sea más robusto. Si una palabra se confunde, elimínala y vuelve
+a grabarla.
+
 ## Vocabulario
 
 | Seña | Palabra |
@@ -46,4 +59,5 @@ python app.py
 | Índice + medio + anular | GRACIAS |
 | ✊ Puño cerrado | ALTO |
 
-Para agregar palabras, añade una regla en `detector.py`.
+Además de estas señas integradas, puedes entrenar las tuyas con
+**➕ Agregar palabra** (o añadir reglas geométricas en `detector.py`).

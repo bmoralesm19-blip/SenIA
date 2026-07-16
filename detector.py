@@ -32,6 +32,15 @@ def fingers_extended(lm):
     return [thumb] + others
 
 
+def features(lm):
+    """Vector de 42 features: landmarks (x, y) relativos a la muñeca,
+    normalizados por el tamaño de la mano (invariante a posición y escala)."""
+    wx, wy = lm[WRIST].x, lm[WRIST].y
+    rel = [(p.x - wx, p.y - wy) for p in lm]
+    scale = max(math.hypot(x, y) for x, y in rel) or 1.0
+    return [c / scale for xy in rel for c in xy]
+
+
 def classify(lm):
     """Mapea la postura de la mano a una palabra. Devuelve None si no reconoce."""
     t, i, m, a, p = fingers_extended(lm)

@@ -6,6 +6,8 @@ arma la frase y puede decirla en voz alta para una persona oyente.
 Ejecutar:  python app.py
 """
 
+import math
+import os
 import threading
 import time
 
@@ -15,10 +17,15 @@ import mediapipe as mp
 import pyttsx3
 from PIL import Image
 
-from detector import classify
+from detector import classify, features
+from dictionary import CustomDictionary
 
 HOLD_SECONDS = 1.2          # tiempo que hay que mantener la seña para confirmarla
 CAM_SIZE = (860, 484)       # tamaño del video en la interfaz
+RECORD_SAMPLES = 30         # muestras a grabar por palabra nueva
+COUNTDOWN_SECONDS = 3
+DICTIONARY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "custom_words.json")
 
 # Paleta celeste / negro
 CELESTE = "#4dd0ff"
@@ -54,6 +61,48 @@ class SignWorker(threading.Thread):
         self._candidate = None
         self._candidate_since = 0.0
         self._committed = None   # evita repetir la palabra sin soltar la seña
+
+        # Diccionario personalizado y grabación de palabras nuevas
+        self.dictionary = CustomDictionary(DICTIONARY_PATH)
+        self.mode = "translate"          # translate | countdown | record
+        self.status_text = ""            # texto para la UI durante la grabación
+        self.record_progress = 0.0
+        self.word_just_added = None      # la UI lo consume para refrescar vocabulario
+        self._record_word = None
+        self._countdown_start = 0.0
+        self._samples = []
+
+    def start_recording(self, word):
+        if self.mode != "translate" or not word:
+            return
+        self._record_word = word
+        self._samples = []
+        self._countdown_start = time.time()
+        self.record_progress = 0.0
+        self.mode = "countdown"
+
+    def _handle_recording(self, feat):
+        now = time.time()
+        if self.mode == "countdown":
+            remaining = COUNTDOWN_SECONDS - (now - self._countdown_start)
+            if remaining > 0:
+                self.status_text = f"Prepara la seña… {math.ceil(remaining)}"
+            else:
+                self.mode = "record"
+        if self.mode == "record":
+            if feat is not None:
+                self._samples.append(feat)
+            done = len(self._samples)
+            self.record_progress = done / RECORD_SAMPLES
+            self.status_text = (f"Grabando «{self._record_word}»  {done}/{RECORD_SAMPLES}"
+                                if feat is not None else "Muestra la mano a la cámara…")
+            if done >= RECORD_SAMPLES:
+                self.dictionary.add(self._record_word, self._samples)
+                self.word_just_added = self._record_word
+                self.mode = "translate"
+                self.status_text = ""
+                self._candidate = None
+                self._committed = self._record_word  # no agregarla de inmediato a la frase
 
     def _update_gesture(self, word):
         now = time.time()
@@ -99,14 +148,19 @@ class SignWorker(threading.Thread):
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = hands.process(rgb)
-            word = None
+            word, feat = None, None
             if result.multi_hand_landmarks:
                 hand = result.multi_hand_landmarks[0]
                 mp_draw.draw_landmarks(
                     frame, hand, mp_hands.HAND_CONNECTIONS, lm_style, conn_style)
-                word = classify(hand.landmark)
+                feat = features(hand.landmark)
+                # Las palabras personalizadas tienen prioridad sobre las reglas
+                word = self.dictionary.classify(feat) or classify(hand.landmark)
 
-            self._update_gesture(word)
+            if self.mode == "translate":
+                self._update_gesture(word)
+            else:
+                self._handle_recording(feat)
             self.frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cap.release()
 
@@ -224,21 +278,60 @@ class SenIAApp(ctk.CTk):
         # Vocabulario
         vocab_card = self._card(right)
         vocab_card.pack(fill="both", expand=True)
-        ctk.CTkLabel(vocab_card, text="VOCABULARIO", font=("Segoe UI", 11, "bold"),
-                     text_color=MUTED).pack(anchor="w", padx=18, pady=(14, 6))
-        grid = ctk.CTkFrame(vocab_card, fg_color="transparent")
-        grid.pack(fill="both", expand=True, padx=18, pady=(0, 14))
+        vocab_header = ctk.CTkFrame(vocab_card, fg_color="transparent")
+        vocab_header.pack(fill="x", padx=18, pady=(14, 6))
+        ctk.CTkLabel(vocab_header, text="VOCABULARIO", font=("Segoe UI", 11, "bold"),
+                     text_color=MUTED).pack(side="left")
+        ctk.CTkButton(vocab_header, text="➕  Agregar palabra", command=self._add_word,
+                      fg_color="transparent", hover_color=PANEL_2, text_color=CELESTE,
+                      border_width=1, border_color=CELESTE_DIM,
+                      font=("Segoe UI", 12, "bold"), height=30, width=150,
+                      corner_radius=8).pack(side="right")
+        self.vocab_grid = ctk.CTkScrollableFrame(vocab_card, fg_color="transparent")
+        self.vocab_grid.pack(fill="both", expand=True, padx=18, pady=(0, 14))
         for col in range(3):
-            grid.grid_columnconfigure(col, weight=1)
-        for idx, (word, gesture) in enumerate(VOCAB):
-            item = ctk.CTkFrame(grid, fg_color=PANEL_2, corner_radius=10)
+            self.vocab_grid.grid_columnconfigure(col, weight=1)
+        self._rebuild_vocab()
+
+    def _rebuild_vocab(self):
+        for child in self.vocab_grid.winfo_children():
+            child.destroy()
+
+        entries = [(word, gesture, False) for word, gesture in VOCAB]
+        entries += [(word, "personalizada", True)
+                    for word in sorted(self.worker.dictionary.words)]
+
+        for idx, (word, gesture, custom) in enumerate(entries):
+            item = ctk.CTkFrame(self.vocab_grid, fg_color=PANEL_2, corner_radius=10,
+                                border_width=1 if custom else 0,
+                                border_color=CELESTE_DIM)
             item.grid(row=idx // 3, column=idx % 3, sticky="nsew", padx=4, pady=4)
             ctk.CTkLabel(item, text=word, font=("Segoe UI", 13, "bold"),
                          text_color=CELESTE).pack(pady=(8, 0))
             ctk.CTkLabel(item, text=gesture, font=("Segoe UI", 10),
-                         text_color=MUTED).pack(pady=(0, 8))
+                         text_color=MUTED).pack(pady=(0, 8 if not custom else 0))
+            if custom:
+                ctk.CTkButton(item, text="✕ eliminar", height=18, width=70,
+                              fg_color="transparent", hover_color="#241a1a",
+                              text_color="#c96a6a", font=("Segoe UI", 10),
+                              command=lambda w=word: self._delete_word(w)).pack(pady=(0, 6))
 
     # ---------- acciones ----------
+
+    def _add_word(self):
+        if self.worker.mode != "translate":
+            return
+        dialog = ctk.CTkInputDialog(
+            title="Agregar palabra",
+            text="Escribe la palabra nueva.\nLuego tendrás 3 segundos para\n"
+                 "preparar la seña y mantenerla frente a la cámara.")
+        word = (dialog.get_input() or "").strip().upper()
+        if word:
+            self.worker.start_recording(word)
+
+    def _delete_word(self, word):
+        self.worker.dictionary.remove(word)
+        self._rebuild_vocab()
 
     def _speak(self):
         with self.worker.lock:
@@ -264,11 +357,23 @@ class SenIAApp(ctk.CTk):
             self.cam_label.configure(image=image, text="")
             self.cam_label._image = image  # evita que el GC libere la imagen
 
-        if self.worker.current:
-            self.word_label.configure(text=self.worker.current, text_color=CELESTE)
+        if self.worker.mode != "translate":
+            # Grabando una palabra nueva: la tarjeta muestra el estado
+            self.word_label.configure(text=self.worker.status_text, text_color=CELESTE,
+                                      font=("Segoe UI", 20, "bold"))
+            self.progress_bar.set(self.worker.record_progress)
+        elif self.worker.current:
+            self.word_label.configure(text=self.worker.current, text_color=CELESTE,
+                                      font=("Segoe UI", 34, "bold"))
+            self.progress_bar.set(self.worker.progress)
         else:
-            self.word_label.configure(text="Muestra una seña…", text_color=DISABLED)
-        self.progress_bar.set(self.worker.progress)
+            self.word_label.configure(text="Muestra una seña…", text_color=DISABLED,
+                                      font=("Segoe UI", 34, "bold"))
+            self.progress_bar.set(self.worker.progress)
+
+        if self.worker.word_just_added:
+            self.worker.word_just_added = None
+            self._rebuild_vocab()
 
         with self.worker.lock:
             text = " ".join(self.worker.sentence)
