@@ -10,7 +10,9 @@ en voz alta.
 ## Tecnología
 
 - **Python 3.12**
-- **MediaPipe Hands** — detección de 21 puntos de la mano por webcam.
+- **MediaPipe Hands** — detección de 21 puntos por mano (hasta 2 manos).
+- **MediaPipe Face Detection** — el rostro como referencia espacial: señas
+  hechas en la frente y en el mentón se distinguen entre sí.
 - **OpenCV** — captura de cámara y dibujo del esqueleto de la mano.
 - **CustomTkinter** — interfaz de escritorio moderna (celeste / negro).
 - **pyttsx3** — voz en español, 100 % offline (SAPI de Windows).
@@ -41,7 +43,9 @@ cada una.
 1. Pulsa **➕ Agregar palabra** y escribe la palabra.
 2. Tras una cuenta regresiva de 3 segundos, mantén tu seña frente a la cámara
    mientras SenIA graba 30 muestras. Puedes usar **una o dos manos** — la
-   posición relativa entre ambas manos forma parte de la seña.
+   posición relativa entre ambas manos forma parte de la seña, igual que la
+   **posición respecto a tu rostro** (una seña en la frente y otra en el
+   mentón son señas distintas). Mantén el rostro visible al grabar y traducir.
 3. La palabra queda guardada en `custom_words.json` (local) y se reconoce al
    instante. Cada palabra tiene un botón **✕ eliminar** para regrabarla.
 

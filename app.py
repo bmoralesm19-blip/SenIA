@@ -120,6 +120,7 @@ class SignWorker(threading.Thread):
 
     def run(self):
         mp_hands = mp.solutions.hands
+        mp_face = mp.solutions.face_detection
         mp_draw = mp.solutions.drawing_utils
         lm_style = mp_draw.DrawingSpec(color=CELESTE_BGR, thickness=2, circle_radius=3)
         conn_style = mp_draw.DrawingSpec(color=(200, 160, 60), thickness=2)
@@ -133,6 +134,9 @@ class SignWorker(threading.Thread):
             min_detection_confidence=0.6,
             min_tracking_confidence=0.5,
         )
+        face_detector = mp_face.FaceDetection(model_selection=0,
+                                              min_detection_confidence=0.5)
+        last_face, last_face_time = None, 0.0
         while self.running:
             ok, frame = cap.read()
             if not ok:
@@ -142,6 +146,25 @@ class SignWorker(threading.Thread):
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = hands.process(rgb)
+
+            # Rostro como referencia espacial (frente, mentón, etc.)
+            now = time.time()
+            face_result = face_detector.process(rgb)
+            if face_result.detections:
+                det = face_result.detections[0]
+                box = det.location_data.relative_bounding_box
+                nose = mp_face.get_key_point(det, mp_face.FaceKeyPoint.NOSE_TIP)
+                last_face = (nose.x, nose.y, box.height or 1e-6)
+                last_face_time = now
+                h, w = frame.shape[:2]
+                cv2.rectangle(frame,
+                              (int(box.xmin * w), int(box.ymin * h)),
+                              (int((box.xmin + box.width) * w),
+                               int((box.ymin + box.height) * h)),
+                              (120, 96, 40), 2)
+            # Suavizado: reutiliza el último rostro visto hasta por 1 s
+            face = last_face if now - last_face_time < 1.0 else None
+
             word, feat = None, None
             if result.multi_hand_landmarks:
                 for hand in result.multi_hand_landmarks:
@@ -151,7 +174,7 @@ class SignWorker(threading.Thread):
                 # produzca siempre el mismo vector de features
                 detected = sorted((h.landmark for h in result.multi_hand_landmarks),
                                   key=lambda lm: lm[0].x)
-                feat = features(detected)
+                feat = features(detected, face)
                 word = self.dictionary.classify(feat)
 
             if self.mode == "translate":
