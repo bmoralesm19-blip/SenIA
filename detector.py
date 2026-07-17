@@ -11,19 +11,24 @@ WRIST = 0
 
 # Peso de la posición respecto al rostro frente a la forma de la mano
 FACE_WEIGHT = 0.5
+# Peso del tamaño aparente de la mano (profundidad: acercar/alejar a la cámara)
+DEPTH_WEIGHT_FACE = 0.5   # relativo al alto del rostro
+DEPTH_WEIGHT_RAW = 2.0    # absoluto (fracción de imagen) cuando no hay rostro
 
 
 def features(hands, face=None):
-    """Vector de features para 1 o 2 manos (42/84 valores, +2 por mano si hay rostro).
+    """Vector de features para 1 o 2 manos.
 
     `hands` es una lista de listas de landmarks, ordenada de izquierda a
     derecha por la muñeca. Todos los puntos se expresan relativos al punto
     medio de las muñecas y se normalizan por la distancia máxima, de modo
     que la separación y orientación entre ambas manos forma parte de la seña.
 
-    `face` es (nariz_x, nariz_y, alto_del_rostro). Si está presente, se añade
-    por cada mano el offset muñeca→nariz en unidades de rostro: así señas
-    hechas en la frente y en el mentón producen vectores distintos.
+    Por cada mano se añade además:
+    - su posición respecto a la nariz (si `face` = (x, y, alto) está presente),
+      para distinguir señas hechas en la frente, el mentón, etc.
+    - su tamaño aparente en la imagen, que crece al acercar la mano a la
+      cámara: la profundidad forma parte de la seña.
     """
     wrists = [(lm[WRIST].x, lm[WRIST].y) for lm in hands]
     ax = sum(x for x, _ in wrists) / len(wrists)
@@ -33,9 +38,14 @@ def features(hands, face=None):
     scale = max(math.hypot(x, y) for x, y in rel) or 1.0
     feat = [c / scale for xy in rel for c in xy]
 
-    if face is not None:
-        nose_x, nose_y, face_size = face
-        for wx, wy in wrists:
+    for lm in hands:
+        wx, wy = lm[WRIST].x, lm[WRIST].y
+        hand_size = max(math.hypot(p.x - wx, p.y - wy) for p in lm) or 1e-6
+        if face is not None:
+            nose_x, nose_y, face_size = face
             feat.append((wx - nose_x) / face_size * FACE_WEIGHT)
             feat.append((wy - nose_y) / face_size * FACE_WEIGHT)
+            feat.append(hand_size / face_size * DEPTH_WEIGHT_FACE)
+        else:
+            feat.append(hand_size * DEPTH_WEIGHT_RAW)
     return feat

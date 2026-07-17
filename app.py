@@ -10,6 +10,7 @@ import math
 import os
 import threading
 import time
+from collections import deque
 
 import cv2
 import customtkinter as ctk
@@ -20,9 +21,11 @@ from PIL import Image
 from detector import features
 from dictionary import CustomDictionary
 
-HOLD_SECONDS = 1.2          # tiempo que hay que mantener la seña para confirmarla
+CONFIRM_SECONDS = 0.4       # reconocimiento continuo necesario para confirmar
+REPEAT_COOLDOWN = 2.5       # segundos antes de poder repetir la misma palabra
 CAM_SIZE = (860, 484)       # tamaño del video en la interfaz
-RECORD_SAMPLES = 30         # muestras a grabar por palabra nueva
+RECORD_SECONDS = 2.5        # duración de la grabación de una palabra nueva
+BUFFER_SECONDS = 3.0        # historial de movimiento para reconocer
 COUNTDOWN_SECONDS = 3
 DICTIONARY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                "custom_words.json")
@@ -65,17 +68,23 @@ class SignWorker(threading.Thread):
         self._record_word = None
         self._countdown_start = 0.0
         self._samples = []
+        self._record_elapsed = 0.0
+        self._last_tick = time.time()
+        self._buffer = deque()           # (timestamp, features) del movimiento reciente
+        self._last_commit_word = None
+        self._last_commit_time = 0.0
 
     def start_recording(self, word):
         if self.mode != "translate" or not word:
             return
         self._record_word = word
         self._samples = []
+        self._record_elapsed = 0.0
         self._countdown_start = time.time()
         self.record_progress = 0.0
         self.mode = "countdown"
 
-    def _handle_recording(self, feat):
+    def _handle_recording(self, feat, dt):
         now = time.time()
         if self.mode == "countdown":
             remaining = COUNTDOWN_SECONDS - (now - self._countdown_start)
@@ -86,17 +95,24 @@ class SignWorker(threading.Thread):
         if self.mode == "record":
             if feat is not None:
                 self._samples.append(feat)
-            done = len(self._samples)
-            self.record_progress = done / RECORD_SAMPLES
-            self.status_text = (f"Grabando «{self._record_word}»  {done}/{RECORD_SAMPLES}"
-                                if feat is not None else "Muestra tus manos a la cámara…")
-            if done >= RECORD_SAMPLES:
-                self.dictionary.add(self._record_word, self._samples)
-                self.word_just_added = self._record_word
+                # El tiempo solo corre mientras la mano está en cámara
+                self._record_elapsed += dt
+                self.status_text = (f"Grabando «{self._record_word}»  "
+                                    f"{self._record_elapsed:.1f}/{RECORD_SECONDS} s — "
+                                    "haz la seña con su movimiento")
+            else:
+                self.status_text = "Muestra tus manos a la cámara…"
+            self.record_progress = min(1.0, self._record_elapsed / RECORD_SECONDS)
+            if self._record_elapsed >= RECORD_SECONDS:
+                if self.dictionary.add(self._record_word, self._samples):
+                    self.word_just_added = self._record_word
                 self.mode = "translate"
                 self.status_text = ""
+                self._buffer.clear()
                 self._candidate = None
-                self._committed = self._record_word  # no agregarla de inmediato a la frase
+                # Evita que la seña recién grabada se agregue sola a la frase
+                self._last_commit_word = self._record_word
+                self._last_commit_time = time.time()
 
     def _update_gesture(self, word):
         now = time.time()
@@ -111,10 +127,15 @@ class SignWorker(threading.Thread):
         elif self._candidate == self._committed:
             self.progress = 1.0
         else:
-            self.progress = min(1.0, (now - self._candidate_since) / HOLD_SECONDS)
+            self.progress = min(1.0, (now - self._candidate_since) / CONFIRM_SECONDS)
             if self.progress >= 1.0:
-                with self.lock:
-                    self.sentence.append(self._candidate)
+                on_cooldown = (self._candidate == self._last_commit_word
+                               and now - self._last_commit_time < REPEAT_COOLDOWN)
+                if not on_cooldown:
+                    with self.lock:
+                        self.sentence.append(self._candidate)
+                    self._last_commit_word = self._candidate
+                    self._last_commit_time = now
                 self._committed = self._candidate
         self.current = self._candidate
 
@@ -165,7 +186,7 @@ class SignWorker(threading.Thread):
             # Suavizado: reutiliza el último rostro visto hasta por 1 s
             face = last_face if now - last_face_time < 1.0 else None
 
-            word, feat = None, None
+            feat = None
             if result.multi_hand_landmarks:
                 for hand in result.multi_hand_landmarks:
                     mp_draw.draw_landmarks(
@@ -175,12 +196,20 @@ class SignWorker(threading.Thread):
                 detected = sorted((h.landmark for h in result.multi_hand_landmarks),
                                   key=lambda lm: lm[0].x)
                 feat = features(detected, face)
-                word = self.dictionary.classify(feat)
+
+            dt = now - self._last_tick
+            self._last_tick = now
 
             if self.mode == "translate":
+                if feat is not None:
+                    self._buffer.append((now, feat))
+                while self._buffer and now - self._buffer[0][0] > BUFFER_SECONDS:
+                    self._buffer.popleft()
+                word = self.dictionary.classify(list(self._buffer), now) \
+                    if feat is not None else None
                 self._update_gesture(word)
             else:
-                self._handle_recording(feat)
+                self._handle_recording(feat, min(dt, 0.1))
             self.frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         cap.release()
 
@@ -264,7 +293,8 @@ class SenIAApp(ctk.CTk):
                                                fg_color=PANEL_2, height=8)
         self.progress_bar.set(0)
         self.progress_bar.pack(fill="x", padx=18, pady=(2, 4))
-        ctk.CTkLabel(sign_card, text="Mantén la seña ~1 segundo para agregarla a la frase",
+        ctk.CTkLabel(sign_card,
+                     text="Haz tu seña (con su movimiento); al reconocerla se agrega a la frase",
                      font=("Segoe UI", 11), text_color=MUTED).pack(pady=(0, 12))
 
         # Frase
@@ -329,11 +359,14 @@ class SenIAApp(ctk.CTk):
             return
 
         for idx, word in enumerate(words):
+            takes = self.worker.dictionary.takes(word)
             item = ctk.CTkFrame(self.vocab_grid, fg_color=PANEL_2, corner_radius=10,
                                 border_width=1, border_color=CELESTE_DIM)
             item.grid(row=idx // 3, column=idx % 3, sticky="nsew", padx=4, pady=4)
             ctk.CTkLabel(item, text=word, font=("Segoe UI", 13, "bold"),
-                         text_color=CELESTE).pack(pady=(10, 2))
+                         text_color=CELESTE).pack(pady=(10, 0))
+            ctk.CTkLabel(item, text=f"{takes} toma{'s' if takes != 1 else ''}",
+                         font=("Segoe UI", 10), text_color=MUTED).pack()
             ctk.CTkButton(item, text="✕ eliminar", height=18, width=70,
                           fg_color="transparent", hover_color="#241a1a",
                           text_color="#c96a6a", font=("Segoe UI", 10),
@@ -346,9 +379,11 @@ class SenIAApp(ctk.CTk):
             return
         dialog = ctk.CTkInputDialog(
             title="Agregar palabra",
-            text="Escribe la palabra nueva.\nLuego tendrás 3 segundos para\n"
-                 "preparar la seña (con una o dos manos)\n"
-                 "y mantenerla frente a la cámara.")
+            text="Escribe la palabra nueva.\nTras 3 segundos de preparación, SenIA\n"
+                 "grabará tu seña durante 2.5 s: haz el\n"
+                 "movimiento completo (una o dos manos,\n"
+                 "quieta o en movimiento).\n"
+                 "Repetir una palabra agrega otra toma\ny mejora el reconocimiento.")
         word = (dialog.get_input() or "").strip().upper()
         if word:
             self.worker.start_recording(word)
